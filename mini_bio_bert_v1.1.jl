@@ -9,9 +9,12 @@ using Statistics: mean, std
 # -----------------------------
 const VOCAB_SIZE = 100
 const MAX_LEN = 8
-const EMBED_DIM = 8
-const FFN_DIM = 8
+const EMBED_DIM = 32        # Increased from 8 for better expressiveness
+const FFN_DIM = 64          # Increased from 8 for better feature extraction
+const DROPOUT_RATE = 0.1     # Regularization for small dataset
 const NUM_CLASSES = 2
+const NUM_HEADS = 4         # Multi-head attention
+const CI_T_VALUE = 2.262    # 95% CI t-value for 10-fold CV
 
 # -----------------------------
 # Multi-Head Attention Layer
@@ -49,27 +52,26 @@ function (m::MultiHeadAttention)(x)
     
     # Linear projections - reshape for matrix multiplication
     x_flat = reshape(x, embed_dim, seq_len * batch_size)
-    q = reshape(m.wq(x_flat), embed_dim, seq_len, batch_size)
-    k = reshape(m.wk(x_flat), embed_dim, seq_len, batch_size)
-    v = reshape(m.wv(x_flat), embed_dim, seq_len, batch_size)
+    q = reshape(m.wq(x_flat), m.head_dim, m.num_heads, seq_len, batch_size)
+    k = reshape(m.wk(x_flat), m.head_dim, m.num_heads, seq_len, batch_size)
+    v = reshape(m.wv(x_flat), m.head_dim, m.num_heads, seq_len, batch_size)
     
-    # Reshape for multi-head attention
-    q = reshape(q, m.head_dim, m.num_heads, seq_len, batch_size)
-    k = reshape(k, m.head_dim, m.num_heads, seq_len, batch_size)
-    v = reshape(v, m.head_dim, m.num_heads, seq_len, batch_size)
+    # Reshape to (seq_len, head_dim, num_heads, batch_size) for batched matmul
+    q = permutedims(q, (3, 1, 2, 4))
+    k = permutedims(k, (3, 1, 2, 4))
+    v = permutedims(v, (3, 1, 2, 4))
     
-    # Scaled dot-product attention
-    scores = NNlib.batched_mul(
-        permutedims(q, (1, 3, 2, 4)), 
-        permutedims(k, (1, 3, 2, 4))
-    ) ./ sqrt(Float32(m.head_dim))
+    # Scaled dot-product attention: (seq_len x head_dim) * (head_dim x seq_len)
+    k_t = permutedims(k, (2, 1, 3, 4))
+    scores = NNlib.batched_mul(q, k_t) ./ sqrt(Float32(m.head_dim))
     
     attn_weights = softmax(scores, dims=2)
     
-    # Apply attention to values
-    out = NNlib.batched_mul(attn_weights, permutedims(v, (1, 3, 2, 4)))
+    # Apply attention to values: (seq_len x seq_len) * (seq_len x head_dim)
+    out = NNlib.batched_mul(attn_weights, v)
     
     # Concatenate heads and project
+    out = permutedims(out, (2, 1, 3, 4))
     out = reshape(out, embed_dim, seq_len, batch_size)
     out_flat = reshape(out, embed_dim, seq_len * batch_size)
     out = reshape(m.wo(out_flat), embed_dim, seq_len, batch_size)
@@ -95,9 +97,10 @@ struct MiniTransformerBlock
 end
 
 function MiniTransformerBlock(embed_dim::Int, ffn_dim::Int)
-    mha = MultiHeadAttention(embed_dim; num_heads=1)
+    mha = MultiHeadAttention(embed_dim; num_heads=NUM_HEADS)
     ffn = Chain(
         Dense(embed_dim => ffn_dim, relu),
+        Dropout(DROPOUT_RATE),
         Dense(ffn_dim => embed_dim)
     )
     norm1 = LayerNorm(embed_dim)
@@ -126,6 +129,7 @@ Flux.@functor MiniTransformerBlock
 
 # -----------------------------
 # Positional Embedding Layer
+# Sinusoidal positional encoding (more stable than random initialization)
 # -----------------------------
 struct AddPositionEmbedding
     pos_embed::AbstractArray{Float32,3}
@@ -137,7 +141,19 @@ struct AddPositionEmbedding
 end
 
 function AddPositionEmbedding(max_len::Int, embed_dim::Int)
-    pos_embed = randn(Float32, embed_dim, max_len, 1) .* 0.1f0
+    # Sinusoidal positional encoding
+    pos_embed = zeros(Float32, embed_dim, max_len, 1)
+    
+    for pos in 0:(max_len-1)
+        for i in 0:(embed_dim-1)
+            if i % 2 == 0
+                pos_embed[i+1, pos+1, 1] = sin(pos / (10000 ^ (i / embed_dim)))
+            else
+                pos_embed[i+1, pos+1, 1] = cos(pos / (10000 ^ ((i-1) / embed_dim)))
+            end
+        end
+    end
+    
     return AddPositionEmbedding(pos_embed)
 end
 
@@ -151,29 +167,18 @@ Flux.@functor AddPositionEmbedding
 
 # -----------------------------
 # Global Average Pooling Layer
+# Reduces (embed_dim, seq_len, batch_size) → (embed_dim, batch_size)
+# by averaging across sequence dimension
 # -----------------------------
 struct GlobalAvgPool end
 
 function (::GlobalAvgPool)(x)
     # x shape: (embed_dim, seq_len, batch_size)
-    # Output: (embed_dim, 1, batch_size)
-    return mean(x, dims=2)
+    # Output: (embed_dim, batch_size)
+    return dropdims(mean(x, dims=2), dims=2)
 end
 
 Flux.@functor GlobalAvgPool
-
-# -----------------------------
-# Reshape Layer
-# -----------------------------
-struct ReshapeLayer end
-
-function (::ReshapeLayer)(x)
-    # x shape: (embed_dim, 1, batch_size)
-    # Output: (embed_dim, batch_size)
-    return reshape(x, size(x, 1), size(x, 3))
-end
-
-Flux.@functor ReshapeLayer
 
 # -----------------------------
 # MiniBioBERT Model
@@ -184,7 +189,6 @@ function MiniBioBERT()
         AddPositionEmbedding(MAX_LEN, EMBED_DIM),           # Positional embedding
         MiniTransformerBlock(EMBED_DIM, FFN_DIM),           # Transformer block
         GlobalAvgPool(),                                     # Global average pooling
-        ReshapeLayer(),                                      # Reshape for classification
         Dense(EMBED_DIM => NUM_CLASSES)                     # Classification head
     )
 end
@@ -273,32 +277,29 @@ end
 # -----------------------------
 function loss_fn(model, x, y)
     ŷ = model(x)
-    # Apply softmax to ensure proper probabilities
-    ŷ_softmax = softmax(ŷ, dims=1)
-    loss = Flux.crossentropy(ŷ_softmax, OneHotArrays.onehotbatch(y, 1:NUM_CLASSES))
+    # crossentropy expects raw logits, not softmax
+    loss = Flux.crossentropy(ŷ, OneHotArrays.onehotbatch(y, 1:NUM_CLASSES))
     return loss
 end
 
 function accuracy(ŷ, y)
-    # Apply softmax for proper probability distribution
-    ŷ_softmax = softmax(ŷ, dims=1)
-    pred = OneHotArrays.onecold(ŷ_softmax, 1:NUM_CLASSES)
+    # Get predictions from logits
+    pred = OneHotArrays.onecold(ŷ, 1:NUM_CLASSES)
     return mean(pred .== y)
 end
 
-function train_model!(model, X_train, Y_train; epochs=200, lr=0.001, verbose=false)
+function train_model!(model, X_train, Y_train; epochs=200, lr=0.001, batch_size=4, verbose=false)
     optimizer = Adam(lr)
     opt_state = Flux.setup(optimizer, model)
-    n_samples = size(X_train, 2)
+    Flux.trainmode!(model)
     
     for epoch in 1:epochs
         total_loss = 0.0
         total_acc = 0.0
+        total_seen = 0
         
-        for i in 1:n_samples
-            x = X_train[:, i:i]  # Single sample
-            y = Y_train[i:i]     # Single label
-            
+        loader = MLUtils.DataLoader((X_train, Y_train), batchsize=batch_size, shuffle=true)
+        for (x, y) in loader
             # Compute loss and gradients
             loss, grads = Flux.withgradient(model) do m
                 loss_fn(m, x, y)
@@ -309,13 +310,14 @@ function train_model!(model, X_train, Y_train; epochs=200, lr=0.001, verbose=fal
             
             # Track metrics
             ŷ = model(x)
-            ŷ_softmax = softmax(ŷ, dims=1)
-            total_loss += loss
-            total_acc += accuracy(ŷ, y)
+            batch_n = length(y)
+            total_loss += loss * batch_n
+            total_acc += accuracy(ŷ, y) * batch_n
+            total_seen += batch_n
         end
         
-        avg_loss = total_loss / n_samples
-        avg_acc = total_acc / n_samples
+        avg_loss = total_loss / total_seen
+        avg_acc = total_acc / total_seen
         
         if verbose && epoch % 40 == 0
             println("  Epoch $epoch | Loss: $(round(avg_loss, digits=4)) | Acc: $(round(avg_acc, digits=4))")
@@ -325,19 +327,20 @@ function train_model!(model, X_train, Y_train; epochs=200, lr=0.001, verbose=fal
     return model
 end
 
-function evaluate_model(model, X_test, Y_test)
+function evaluate_model(model, X_test, Y_test; batch_size=32)
+    Flux.testmode!(model)
     total_acc = 0.0
-    n_samples = size(X_test, 2)
+    total_seen = 0
     
-    for i in 1:n_samples
-        x = X_test[:, i:i]
-        y = Y_test[i:i]
+    loader = MLUtils.DataLoader((X_test, Y_test), batchsize=batch_size, shuffle=false)
+    for (x, y) in loader
         ŷ = model(x)
-        acc = accuracy(ŷ, y)
-        total_acc += acc
+        batch_n = length(y)
+        total_acc += accuracy(ŷ, y) * batch_n
+        total_seen += batch_n
     end
     
-    return total_acc / n_samples
+    return total_acc / total_seen
 end
 
 # -----------------------------
@@ -369,7 +372,7 @@ function create_folds(n_samples::Int, k::Int=10)
     return folds
 end
 
-function k_fold_cross_validation(sentences, labels, vocab; k=10, epochs=200, lr=0.001)
+function k_fold_cross_validation(sentences, labels, vocab; k=10, epochs=200, lr=0.001, batch_size=4)
     """Perform k-fold cross-validation"""
     println("Starting $k-fold cross-validation...")
     
@@ -407,11 +410,11 @@ function k_fold_cross_validation(sentences, labels, vocab; k=10, epochs=200, lr=
         
         # Create and train model
         model = MiniBioBERT()
-        model = train_model!(model, X_train, Y_train, epochs=epochs, lr=lr, verbose=false)
+        model = train_model!(model, X_train, Y_train, epochs=epochs, lr=lr, batch_size=batch_size, verbose=false)
         
         # Evaluate on test set
-        test_acc = evaluate_model(model, X_test, Y_test)
-        train_acc = evaluate_model(model, X_train, Y_train)
+        test_acc = evaluate_model(model, X_test, Y_test, batch_size=batch_size)
+        train_acc = evaluate_model(model, X_train, Y_train, batch_size=batch_size)
         
         push!(fold_accuracies, test_acc)
         push!(fold_details, (fold=fold, train_acc=train_acc, test_acc=test_acc, 
@@ -450,7 +453,7 @@ function print_cv_results(fold_accuracies, fold_details)
     
     # Calculate confidence interval (assuming normal distribution)
     n = length(fold_accuracies)
-    t_value = 2.262  # t-value for 95% CI with 9 degrees of freedom (10-fold CV)
+    t_value = CI_T_VALUE  # t-value for 95% CI with 9 degrees of freedom (10-fold CV)
     margin_of_error = t_value * std_acc / sqrt(n)
     ci_lower = mean_acc - margin_of_error
     ci_upper = mean_acc + margin_of_error
@@ -501,7 +504,9 @@ function main()
     println("\nTraining final model on full dataset...")
     X, Y = prepare_data(sentences, labels, vocab)
     final_model = MiniBioBERT()
-    final_model = train_model!(final_model, X, Y, epochs=200, lr=0.001, verbose=true)
+    final_model = train_model!(final_model, X, Y, epochs=200, lr=0.001, batch_size=4, verbose=true)
+    
+    Flux.testmode!(final_model)
     
     # Test with new sentences
     println("\nTesting final model with new sentences:")
