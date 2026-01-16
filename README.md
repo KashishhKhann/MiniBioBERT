@@ -101,20 +101,29 @@ Total parameters: 5342
 Starting 10-fold cross-validation...
 Data split into 10 folds:
   Fold 1: 2 samples
-  ...
+  Fold 2: 2 samples
+  ... (8 more folds)
+
 Training fold 1/10...
   Training samples: 18, Test samples: 2
-  Fold 1 results: Train Acc: 0.7222, Test Acc: 0.5000
+  Fold 1 results: Train Acc: 1.0, Test Acc: 1.0
 
 [Additional folds...]
 
+============================================================
 CROSS-VALIDATION RESULTS
-Mean Test Accuracy: 0.6750 ± 0.1708
-95% Confidence Interval: [0.5154, 0.8346]
+============================================================
+Mean Test Accuracy: 0.75 ± 0.3536
+95% Confidence Interval: [0.4971, 1.0029]
+
+Training final model on full dataset...
+  Epoch 40 | Loss: 0.0045 | Acc: 1.0
+  Epoch 200 | Loss: 0.0002 | Acc: 1.0
 
 Testing final model with new sentences:
-'Paracetamol reduces fever' → treatment (confidence: 0.987)
-'Nausea is uncomfortable feeling' → symptom (confidence: 0.923)
+'Paracetamol reduces fever' → treatment (confidence: 0.678)
+'Chemotherapy destroys cancer cells' → treatment (confidence: 0.995)
+'Radiotherapy treats tumors' → treatment (confidence: 0.968)
 ```
 
 ## 🔧 Configuration
@@ -175,12 +184,14 @@ The model achieves:
 - **Metrics**: Accuracy, with per-fold and aggregate statistics
 - **Generalization**: Tests on held-out biomedical sentences
 
+**Note on Sample Dataset**: The included 20-sample biomedical dataset is for demonstration only. The high training accuracy (100%) and variable test accuracy reflect the small dataset size. For production use, train on larger, more diverse biomedical corpora.
+
 Example predictions:
 | Sentence | Prediction | Confidence |
 |----------|-----------|------------|
-| "Paracetamol reduces fever" | Treatment | 0.987 |
-| "Nausea is uncomfortable feeling" | Symptom | 0.923 |
-| "Chemotherapy destroys cancer cells" | Treatment | 0.875 |
+| "Paracetamol reduces fever" | Treatment | 0.678 |
+| "Chemotherapy destroys cancer cells" | Treatment | 0.995 |
+| "Radiotherapy treats tumors" | Treatment | 0.968 |
 
 ## 🔄 Evaluation Protocol
 
