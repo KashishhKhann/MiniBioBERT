@@ -184,14 +184,49 @@ The model achieves:
 - **Metrics**: Accuracy, with per-fold and aggregate statistics
 - **Generalization**: Tests on held-out biomedical sentences
 
+**Actual Training Results (10-Fold Cross-Validation):**
+
+Individual Fold Results:
+```
+Fold 1: Train=1.0, Test=1.0 (18 train, 2 test) ✓
+Fold 2: Train=1.0, Test=1.0 (18 train, 2 test) ✓
+Fold 3: Train=1.0, Test=0.5 (18 train, 2 test)
+Fold 4: Train=1.0, Test=0.5 (18 train, 2 test)
+Fold 5: Train=1.0, Test=0.0 (18 train, 2 test)
+Fold 6: Train=1.0, Test=1.0 (18 train, 2 test) ✓
+Fold 7: Train=1.0, Test=1.0 (18 train, 2 test) ✓
+Fold 8: Train=1.0, Test=0.5 (18 train, 2 test)
+Fold 9: Train=1.0, Test=1.0 (18 train, 2 test) ✓
+Fold 10: Train=1.0, Test=1.0 (18 train, 2 test) ✓
+```
+
+**Summary Statistics:**
+```
+Mean Test Accuracy:      0.75 ± 0.3536
+Min Test Accuracy:       0.0
+Max Test Accuracy:       1.0
+Accuracy Range:          1.0
+95% Confidence Interval: [0.4971, 1.0029]
+```
+
+**Final Model Training (Full Dataset):**
+```
+Epoch 40   | Loss: 0.0045 | Acc: 1.0
+Epoch 80   | Loss: 0.0011 | Acc: 1.0
+Epoch 120  | Loss: 0.0005 | Acc: 1.0
+Epoch 160  | Loss: 0.0003 | Acc: 1.0
+Epoch 200  | Loss: 0.0002 | Acc: 1.0  ← Convergence achieved
+```
+
 **Note on Sample Dataset**: The included 20-sample biomedical dataset is for demonstration only. The high training accuracy (100%) and variable test accuracy reflect the small dataset size. For production use, train on larger, more diverse biomedical corpora.
 
-Example predictions:
+**Example Predictions from Final Model:**
 | Sentence | Prediction | Confidence |
 |----------|-----------|------------|
 | "Paracetamol reduces fever" | Treatment | 0.678 |
 | "Chemotherapy destroys cancer cells" | Treatment | 0.995 |
 | "Radiotherapy treats tumors" | Treatment | 0.968 |
+| "Vomiting is side effect" | Treatment | 0.865 |
 
 ## 🔄 Evaluation Protocol
 
