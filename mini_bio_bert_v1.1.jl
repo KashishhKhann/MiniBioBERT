@@ -277,8 +277,8 @@ end
 # -----------------------------
 function loss_fn(model, x, y)
     ŷ = model(x)
-    # crossentropy expects raw logits, not softmax
-    loss = Flux.crossentropy(ŷ, OneHotArrays.onehotbatch(y, 1:NUM_CLASSES))
+    # Use logitcrossentropy for numerical stability with raw logits
+    loss = Flux.logitcrossentropy(ŷ, OneHotArrays.onehotbatch(y, 1:NUM_CLASSES))
     return loss
 end
 
