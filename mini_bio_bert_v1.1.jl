@@ -293,6 +293,9 @@ function train_model!(model, X_train, Y_train; epochs=200, lr=0.001, batch_size=
     opt_state = Flux.setup(optimizer, model)
     Flux.trainmode!(model)
     
+    loss_history = Float64[]
+    acc_history = Float64[]
+    
     for epoch in 1:epochs
         total_loss = 0.0
         total_acc = 0.0
@@ -319,12 +322,15 @@ function train_model!(model, X_train, Y_train; epochs=200, lr=0.001, batch_size=
         avg_loss = total_loss / total_seen
         avg_acc = total_acc / total_seen
         
+        push!(loss_history, avg_loss)
+        push!(acc_history, avg_acc)
+        
         if verbose && epoch % 40 == 0
             println("  Epoch $epoch | Loss: $(round(avg_loss, digits=4)) | Acc: $(round(avg_acc, digits=4))")
         end
     end
     
-    return model
+    return model, loss_history, acc_history
 end
 
 function evaluate_model(model, X_test, Y_test; batch_size=32)
@@ -347,7 +353,7 @@ end
 # Cross-Validation Functions
 # -----------------------------
 function create_folds(n_samples::Int, k::Int=10)
-    """Create k-fold cross-validation indices"""
+    # Create k-fold cross-validation indices
     # Create shuffled indices
     indices = randperm(n_samples)
     
@@ -373,7 +379,7 @@ function create_folds(n_samples::Int, k::Int=10)
 end
 
 function k_fold_cross_validation(sentences, labels, vocab; k=10, epochs=200, lr=0.001, batch_size=4)
-    """Perform k-fold cross-validation"""
+    # Perform k-fold cross-validation
     println("Starting $k-fold cross-validation...")
     
     # Prepare full dataset
@@ -410,7 +416,7 @@ function k_fold_cross_validation(sentences, labels, vocab; k=10, epochs=200, lr=
         
         # Create and train model
         model = MiniBioBERT()
-        model = train_model!(model, X_train, Y_train, epochs=epochs, lr=lr, batch_size=batch_size, verbose=false)
+        model, _, _ = train_model!(model, X_train, Y_train, epochs=epochs, lr=lr, batch_size=batch_size, verbose=false)
         
         # Evaluate on test set
         test_acc = evaluate_model(model, X_test, Y_test, batch_size=batch_size)
@@ -494,7 +500,7 @@ function main()
     # Perform 10-fold cross-validation
     fold_accuracies, fold_details = k_fold_cross_validation(
         sentences, labels, vocab, 
-        k=10, epochs=200, lr=0.001
+        k=10, epochs=200, lr=0.001, batch_size=4
     )
     
     # Print results
@@ -504,7 +510,7 @@ function main()
     println("\nTraining final model on full dataset...")
     X, Y = prepare_data(sentences, labels, vocab)
     final_model = MiniBioBERT()
-    final_model = train_model!(final_model, X, Y, epochs=200, lr=0.001, batch_size=4, verbose=true)
+    final_model, loss_history, _ = train_model!(final_model, X, Y, epochs=200, lr=0.001, batch_size=4, verbose=true)
     
     Flux.testmode!(final_model)
     
@@ -522,8 +528,7 @@ function main()
         ids = encode(sentence, vocab, MAX_LEN)
         x = reshape(ids, :, 1)
         ŷ = final_model(x)
-        ŷ_softmax = softmax(ŷ, dims=1)
-        pred = OneHotArrays.onecold(ŷ_softmax, 1:NUM_CLASSES)[1]
+        pred = OneHotArrays.onecold(ŷ, 1:NUM_CLASSES)[1]
         pred_name = pred == 1 ? "symptom" : "treatment"
         confidence = maximum(softmax(ŷ[:, 1]))
         println("'$sentence' → $pred_name (confidence: $(round(confidence, digits=3)))")
